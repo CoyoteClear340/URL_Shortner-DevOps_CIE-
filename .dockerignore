@@ -1,0 +1,11 @@
+node_modules
+coverage
+.git
+.env
+*.log
+tests
+README.md
+ARCHITECTURE.md
+DEMO.md
+TROUBLESHOOTING.md
+VIVA.md

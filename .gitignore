@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+.env
+.env.*
+!.env.example
+secret.yaml
+*.log
+.DS_Store
+AGENTS.md
+VIVA.md
+assessment-text.txt
+DOSS-TH CIE-01 ASSESSMENT SHEET-PG1.pdf
+DOSS-TH CIE-01 ASSESSMENT SHEET-PG2.pdf
