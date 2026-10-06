@@ -1,50 +1,79 @@
 pipeline {
-  agent any
+    agent any
 
-  parameters {
-    string(name: 'DOCKER_IMAGE', defaultValue: 'your-dockerhub-user/url-shortener', description: 'Docker Hub image repository')
-    string(name: 'KUBE_NAMESPACE', defaultValue: 'url-shortener', description: 'Kubernetes namespace')
-  }
+    parameters {
+        string(name: 'DOCKER_IMAGE', defaultValue: 'your-dockerhub-user/url-shortener', description: 'Docker Hub image repository')
+        string(name: 'KUBE_NAMESPACE', defaultValue: 'url-shortener', description: 'Kubernetes namespace')
+    }
 
-  environment {
-    IMAGE_TAG = "build-${BUILD_NUMBER}"
-    FULL_IMAGE = "${params.DOCKER_IMAGE}:build-${BUILD_NUMBER}"
-  }
+    environment {
+        IMAGE_TAG = "build-${BUILD_NUMBER}"
+        FULL_IMAGE = "${params.DOCKER_IMAGE}:build-${BUILD_NUMBER}"
+    }
 
-  stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
-    stage('Install Dependencies') {
-      steps { sh 'npm ci' }
-    }
-    stage('Test') {
-      steps { sh 'npm test -- --runInBand' }
-    }
-    stage('Docker Build') {
-      steps { sh 'docker build -t "$FULL_IMAGE" .' }
-    }
-    stage('Docker Push') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-          sh 'echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin'
-          sh 'docker push "$FULL_IMAGE"'
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
         }
-      }
-    }
-    stage('Kubernetes Deploy') {
-      steps {
-        withKubeConfig([credentialsId: 'kubernetes-config']) {
-          sh 'kubectl apply -f k8s/namespace.yaml'
-          sh 'kubectl apply -f k8s/configmap.yaml -f k8s/postgres.yaml -f k8s/service.yaml'
-          sh 'kubectl -n "$KUBE_NAMESPACE" apply -f k8s/deployment.yaml'
-          sh 'kubectl -n "$KUBE_NAMESPACE" set image deployment/url-shortener url-shortener="$FULL_IMAGE"'
-          sh 'kubectl -n "$KUBE_NAMESPACE" rollout status deployment/url-shortener --timeout=120s'
+
+        stage('Install Dependencies') {
+            steps {
+                bat 'npm ci'
+            }
         }
-      }
+
+        stage('Test') {
+            steps {
+                bat 'npm test -- --runInBand'
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                bat 'docker build -t "%FULL_IMAGE%" .'
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+                    bat 'docker login --username "%DOCKER_USERNAME%" --password "%DOCKER_PASSWORD%"'
+                    bat 'docker push "%FULL_IMAGE%"'
+                }
+            }
+        }
+
+        stage('Kubernetes Deploy') {
+            steps {
+                withKubeConfig([credentialsId: 'kubernetes-config']) {
+
+                    bat 'kubectl apply -f k8s/namespace.yaml'
+
+                    bat 'kubectl apply -f k8s/configmap.yaml -f k8s/postgres.yaml -f k8s/service.yaml'
+
+                    bat 'kubectl -n "%KUBE_NAMESPACE%" apply -f k8s/deployment.yaml'
+
+                    bat 'kubectl -n "%KUBE_NAMESPACE%" set image deployment/url-shortener url-shortener="%FULL_IMAGE%"'
+
+                    bat 'kubectl -n "%KUBE_NAMESPACE%" rollout status deployment/url-shortener --timeout=120s'
+                }
+            }
+        }
     }
-  }
-  post {
-    always { sh 'docker logout || true' }
-  }
+
+    post {
+        always {
+            bat 'docker logout'
+        }
+    }
 }
+

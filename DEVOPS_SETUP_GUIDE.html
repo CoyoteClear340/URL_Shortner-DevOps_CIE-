@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>URL Shortener DevOps Setup Guide</title>
+  <style>
+    :root { --ink:#17202a; --muted:#52606d; --blue:#0b5cad; --light:#eef6ff; --border:#d9e2ec; --code:#111827; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); font:16px/1.55 system-ui,-apple-system,Segoe UI,Arial,sans-serif; background:#f7f9fb; }
+    main { max-width:1100px; margin:0 auto; padding:32px 20px 70px; background:#fff; }
+    h1,h2,h3 { line-height:1.2; color:#102a43; }
+    h1 { font-size:2.2rem; border-bottom:4px solid var(--blue); padding-bottom:12px; }
+    h2 { margin-top:42px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+    h3 { margin-top:28px; }
+    .notice { background:var(--light); border-left:5px solid var(--blue); padding:14px 18px; margin:18px 0; }
+    .warning { background:#fff8e1; border-left:5px solid #e0a000; padding:14px 18px; margin:18px 0; }
+    code { background:#eef2f7; padding:2px 5px; border-radius:4px; }
+    pre { background:var(--code); color:#e5edf5; padding:16px; overflow:auto; border-radius:7px; }
+    pre code { background:transparent; padding:0; color:inherit; }
+    table { border-collapse:collapse; width:100%; margin:14px 0 22px; }
+    th,td { border:1px solid var(--border); padding:9px 11px; text-align:left; vertical-align:top; }
+    th { background:#f0f4f8; }
+    li { margin:6px 0; }
+    .done { color:#087f5b; font-weight:600; }
+    .small { color:var(--muted); font-size:.94rem; }
+    .toc a { color:var(--blue); text-decoration:none; }
+    .toc a:hover { text-decoration:underline; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>URL Shortener: Jenkins, Kubernetes, Prometheus and Grafana</h1>
+  <p class="small">A Windows/Docker Desktop step-by-step runbook for this repository.</p>
+
+  <div class="notice">
+    <strong>What is already in this project?</strong>
+    <p>The repository already contains <code>jenkins/Jenkinsfile</code>, Kubernetes manifests in
+    <code>k8s/</code>, Docker Compose services for PostgreSQL, the API, Prometheus and Grafana,
+    Prometheus configuration in <code>monitoring/prometheus.yml</code>, and a provisioned Grafana
+    dashboard in <code>monitoring/grafana/dashboard.json</code>.</p>
+    <p>This guide explains how to configure and run them. Jenkins and Kubernetes are tools that must
+    still be installed and configured on your computer. The easiest monitoring demonstration uses
+    Docker Compose for Prometheus and Grafana while Kubernetes runs the application.</p>
+  </div>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#architecture">Understand the flow</a></li>
+      <li><a href="#prerequisites">Install prerequisites</a></li>
+      <li><a href="#local">Verify the project locally</a></li>
+      <li><a href="#docker">Build and publish the Docker image</a></li>
+      <li><a href="#kubernetes">Create the Kubernetes deployment</a></li>
+      <li><a href="#jenkins">Create the Jenkins pipeline</a></li>
+      <li><a href="#monitoring">Create Prometheus and Grafana monitoring</a></li>
+      <li><a href="#demo">Run the live demonstration</a></li>
+      <li><a href="#troubleshoot">Troubleshoot common problems</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="architecture">1. Understand the flow</h2>
+  <pre><code>Developer
+  | git push
+  v
+GitHub
+  | webhook or manual build
+  v
+Jenkins
+  | npm ci -> npm test -> docker build -> docker push -> kubectl deploy
+  v
+Docker Hub
+  v
+Kubernetes
+  | two URL-shortener pods behind a Service
+  v
+URL Shortener API /metrics
+  v
+Prometheus
+  v
+Grafana dashboard</code></pre>
+  <table>
+    <tr><th>Tool</th><th>Why it exists</th><th>Input</th><th>Output</th></tr>
+    <tr><td>Git/GitHub</td><td>Version control and collaboration</td><td>Source changes</td><td>Commits, branches and pull requests</td></tr>
+    <tr><td>Jenkins</td><td>Automates repeatable delivery</td><td>Git commit</td><td>Tested and pushed image, Kubernetes deployment</td></tr>
+    <tr><td>Docker</td><td>Packages the API consistently</td><td>Source and Dockerfile</td><td>Container image</td></tr>
+    <tr><td>Kubernetes</td><td>Runs, checks and scales containers</td><td>Image and YAML</td><td>Pods and Service</td></tr>
+    <tr><td>Prometheus</td><td>Scrapes and stores time-series metrics</td><td><code>/metrics</code></td><td>PromQL query results</td></tr>
+    <tr><td>Grafana</td><td>Visualizes Prometheus data</td><td>PromQL queries</td><td>Dashboard panels</td></tr>
+  </table>
+
+  <h2 id="prerequisites">2. Install prerequisites</h2>
+  <p>Install these on the machine used for the demonstration:</p>
+  <ul>
+    <li>Git, Node.js 20 or newer, and npm</li>
+    <li>Docker Desktop, with Docker Engine running</li>
+    <li>Docker Desktop Kubernetes enabled, or Minikube/kind</li>
+    <li><code>kubectl</code> available in PowerShell</li>
+    <li>Jenkins running on a Linux/Docker agent for the supplied Jenkinsfile</li>
+    <li>A Docker Hub account and an empty image repository named <code>url-shortener</code></li>
+  </ul>
+  <p>Check the local tools:</p>
+  <pre><code>git --version
+node --version
+npm --version
+docker version
+kubectl version --client
+kubectl get nodes</code></pre>
+  <div class="warning">
+    The supplied Jenkinsfile uses Linux shell steps such as <code>sh</code>, <code>npm ci</code>,
+    <code>docker</code> and <code>kubectl</code>. Use a Jenkins Linux agent or a Jenkins agent
+    running Docker/Linux. Do not run this Jenkinsfile on a Windows-only agent without adapting
+    every <code>sh</code> step to PowerShell.
+  </div>
+
+  <h2 id="local">3. Verify the project locally first</h2>
+  <p>Run these commands from the repository root, for example <code>D:\url_shortner</code>:</p>
+  <pre><code>git clone https://github.com/CoyoteClear340/URL_Shortner-DevOps_CIE-.git
+cd URL_Shortner-DevOps_CIE-
+npm ci
+npm test
+npm run lint</code></pre>
+  <p>Start the complete local stack. This starts PostgreSQL, the API, Prometheus and Grafana:</p>
+  <pre><code>docker compose up --build -d
+docker compose ps
+docker compose logs app</code></pre>
+  <p>Verify the API:</p>
+  <pre><code>Invoke-WebRequest http://localhost:3000/ -UseBasicParsing
+Invoke-WebRequest http://localhost:3000/health -UseBasicParsing
+Invoke-WebRequest http://localhost:3000/metrics -UseBasicParsing</code></pre>
+  <p>Open these URLs:</p>
+  <table>
+    <tr><th>URL</th><th>Purpose</th></tr>
+    <tr><td><a href="http://localhost:3000/">http://localhost:3000/</a></td><td>API information</td></tr>
+    <tr><td><a href="http://localhost:3000/health">http://localhost:3000/health</a></td><td>Health check</td></tr>
+    <tr><td><a href="http://localhost:9090/targets">http://localhost:9090/targets</a></td><td>Prometheus target status</td></tr>
+    <tr><td><a href="http://localhost:3001/">http://localhost:3001/</a></td><td>Grafana; default login is admin/admin</td></tr>
+  </table>
+
+  <h2 id="docker">4. Build and publish the Docker image</h2>
+  <p><strong>Why:</strong> Jenkins cannot deploy source code directly. It builds one immutable image,
+  pushes that image to Docker Hub, and Kubernetes runs the same image.</p>
+  <pre><code>docker build -t YOUR_DOCKERHUB_USERNAME/url-shortener:local .
+docker images YOUR_DOCKERHUB_USERNAME/url-shortener
+docker run --rm -p 3000:3000 YOUR_DOCKERHUB_USERNAME/url-shortener:local</code></pre>
+  <p>In another PowerShell window:</p>
+  <pre><code>Invoke-WebRequest http://localhost:3000/health -UseBasicParsing</code></pre>
+  <p>Publish a test tag:</p>
+  <pre><code>docker login
+docker tag YOUR_DOCKERHUB_USERNAME/url-shortener:local YOUR_DOCKERHUB_USERNAME/url-shortener:v1
+docker push YOUR_DOCKERHUB_USERNAME/url-shortener:v1</code></pre>
+
+  <h2 id="kubernetes">5. Create the Kubernetes deployment</h2>
+  <p><strong>Why:</strong> Kubernetes keeps the API running, provides a stable Service address,
+  performs health checks, and can scale two pods to four pods.</p>
+  <h3>5.1 Create a registry pull secret and application secret</h3>
+  <p>For a public Docker Hub repository, a registry secret is optional. The database secret is
+  required by the deployment. Create it without committing credentials to Git:</p>
+  <pre><code>kubectl apply -f k8s/namespace.yaml
+kubectl -n url-shortener create secret generic postgres-secret `
+  --from-literal=POSTGRES_PASSWORD=urlshortener --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n url-shortener create secret generic url-shortener-secret `
+  --from-literal=DATABASE_URL=postgresql://urlshortener:urlshortener@postgres:5432/urlshortener `
+  --dry-run=client -o yaml | kubectl apply -f -</code></pre>
+  <p>For a private Docker Hub repository, create a pull secret:</p>
+  <pre><code>kubectl -n url-shortener create secret docker-registry dockerhub-registry `
+  --docker-server=https://index.docker.io/v1/ `
+  --docker-username=YOUR_DOCKERHUB_USERNAME `
+  --docker-password=YOUR_DOCKERHUB_ACCESS_TOKEN `
+  --docker-email=YOUR_EMAIL</code></pre>
+  <div class="warning">Use a Docker Hub access token instead of your Docker Hub password. Never put
+  real passwords, tokens or <code>secret.yaml</code> files in Git.</div>
+
+  <h3>5.2 Apply PostgreSQL and the API</h3>
+  <pre><code>kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/postgres.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl get all -n url-shortener
+kubectl get pods -n url-shortener -w</code></pre>
+  <p>Check details and logs:</p>
+  <pre><code>kubectl describe deployment url-shortener -n url-shortener
+kubectl logs deployment/url-shortener -n url-shortener
+kubectl get service url-shortener -n url-shortener</code></pre>
+  <p>Access the Service from the laptop:</p>
+  <pre><code>kubectl port-forward service/url-shortener 3000:3000 -n url-shortener</code></pre>
+  <p>Then verify <code>http://localhost:3000/health</code>. The deployment starts with
+  <strong>2 replicas</strong>. Demonstrate scaling:</p>
+  <pre><code>kubectl scale deployment url-shortener --replicas=4 -n url-shortener
+kubectl get pods -n url-shortener</code></pre>
+
+  <h3>5.3 Deploy the exact Jenkins image manually</h3>
+  <p>Jenkins uses tags such as <code>build-17</code>. Test the same deployment behavior manually:</p>
+  <pre><code>kubectl -n url-shortener set image deployment/url-shortener `
+  url-shortener=YOUR_DOCKERHUB_USERNAME/url-shortener:v1
+kubectl rollout status deployment/url-shortener -n url-shortener</code></pre>
+  <p>If the image is private, add <code>imagePullSecrets</code> to the pod template in
+  <code>k8s/deployment.yaml</code>:</p>
+  <pre><code>spec:
+  imagePullSecrets:
+    - name: dockerhub-registry</code></pre>
+
+  <h2 id="jenkins">6. Create the Jenkins pipeline</h2>
+  <p><strong>Why:</strong> Jenkins makes every change follow the same checkout, test, image-build,
+  image-push and deployment process. This prevents a manually tested image from being different
+  from the image deployed to Kubernetes.</p>
+  <h3>6.1 Start Jenkins</h3>
+  <p>Use an existing Jenkins server, or run one locally. A production-like Jenkins setup needs a
+  Linux agent with Docker CLI, access to the Docker daemon, Node.js/npm, Git, kubectl and a
+  Kubernetes kubeconfig credential.</p>
+  <p>In Jenkins, install these plugins from <strong>Manage Jenkins → Plugins</strong>:</p>
+  <ul>
+    <li>Pipeline</li>
+    <li>Git</li>
+    <li>Credentials Binding</li>
+    <li>Docker Pipeline</li>
+    <li>Kubernetes CLI</li>
+  </ul>
+  <h3>6.2 Add Jenkins credentials</h3>
+  <table>
+    <tr><th>Credential ID</th><th>Type</th><th>Value</th><th>Used by</th></tr>
+    <tr><td><code>dockerhub-credentials</code></td><td>Username with password</td><td>Docker Hub username and access token</td><td>Docker Push stage</td></tr>
+    <tr><td><code>kubernetes-config</code></td><td>Secret file or kubeconfig credential supported by the Kubernetes CLI plugin</td><td>Access to the target cluster</td><td>Kubernetes Deploy stage</td></tr>
+  </table>
+  <p>Never write either value directly in <code>jenkins/Jenkinsfile</code>.</p>
+  <h3>6.3 Create the Pipeline job</h3>
+  <ol>
+    <li>Open Jenkins and select <strong>New Item</strong>.</li>
+    <li>Name it <code>url-shortener-pipeline</code>.</li>
+    <li>Select <strong>Pipeline</strong> and press <strong>OK</strong>.</li>
+    <li>Under <strong>Pipeline → Definition</strong>, select <strong>Pipeline script from SCM</strong>.</li>
+    <li>SCM: <strong>Git</strong>; enter the GitHub repository URL.</li>
+    <li>Select the branch, normally <code>main</code>.</li>
+    <li>Script path: <code>jenkins/Jenkinsfile</code>.</li>
+    <li>Save, then select <strong>Build with Parameters</strong>.</li>
+  </ol>
+  <h3>6.4 Supply pipeline parameters</h3>
+  <pre><code>DOCKER_IMAGE=YOUR_DOCKERHUB_USERNAME/url-shortener
+KUBE_NAMESPACE=url-shortener</code></pre>
+  <p>The pipeline stages are already present in <code>jenkins/Jenkinsfile</code>:</p>
+  <pre><code>Checkout
+Install Dependencies
+Test
+Docker Build
+Docker Push
+Kubernetes Deploy</code></pre>
+  <p>Click <strong>Build Now</strong>. Open the build and inspect <strong>Console Output</strong>.
+  A successful build should show tests passing, an image tag such as
+  <code>YOUR_DOCKERHUB_USERNAME/url-shortener:build-1</code>, a Docker push, and a successful
+  Kubernetes rollout.</p>
+  <h3>6.5 Optional GitHub webhook</h3>
+  <p>For a live push-to-build demonstration, configure a reachable Jenkins URL and a GitHub webhook
+  pointing to <code>JENKINS_URL/github-webhook/</code>. Select the GitHub trigger in the Jenkins job.
+  If Jenkins is only on localhost, use manual <strong>Build with Parameters</strong>; localhost
+  cannot receive a GitHub webhook from the public internet.</p>
+
+  <h2 id="monitoring">7. Create Prometheus and Grafana monitoring</h2>
+  <p><strong>Why:</strong> the API exposes counters and a latency histogram at
+  <code>/metrics</code>. Prometheus scrapes those metrics. Grafana runs PromQL queries against
+  Prometheus and displays request rate, errors, latency and healthy instances.</p>
+  <h3>7.1 Run monitoring with Docker Compose (recommended for this project)</h3>
+  <pre><code>docker compose up --build -d
+docker compose ps
+docker compose logs prometheus
+docker compose logs grafana</code></pre>
+  <p>The project configuration makes Prometheus scrape <code>app:3000/metrics</code> using
+  <code>monitoring/prometheus.yml</code>. Grafana uses the provisioned datasource
+  <code>http://prometheus:9090</code> and imports the dashboard automatically.</p>
+  <p>In Prometheus, open <code>Status → Targets</code>. The <code>url-shortener</code> target must
+  be <strong>UP</strong>. Test queries under <code>Graph</code>:</p>
+  <pre><code>http_requests_total
+sum(rate(http_requests_total[1m]))
+sum(rate(http_errors_total[1m]))
+histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+count(up{job="url-shortener"} == 1)</code></pre>
+  <h3>7.2 Open and use Grafana</h3>
+  <ol>
+    <li>Open <code>http://localhost:3001</code>.</li>
+    <li>Sign in with <code>admin</code>/<code>admin</code> if prompted.</li>
+    <li>Open the dashboard named <strong>URL Shortener - Full Observability</strong>.</li>
+    <li>Confirm the four panels: Request Rate, Error Rate, Request Latency (p95), and Healthy Application Instances.</li>
+  </ol>
+  <p>Generate normal traffic:</p>
+  <pre><code>.\scripts\generate-traffic.ps1 -Count 100</code></pre>
+  <p>Every tenth request is an intentional unknown short-code request. It produces a controlled
+  404 and raises <code>http_errors_total</code>; PowerShell now handles this expected response
+  without printing noisy failures. Refresh the Grafana time range if necessary.</p>
+  <h3>7.3 Optional: scrape Kubernetes pods with Prometheus</h3>
+  <p>The repository also contains <code>k8s/prometheus-config.yaml</code> with Kubernetes pod
+  discovery and the required annotations on the API deployment. This is a configuration ConfigMap,
+  not a complete Prometheus installation. A Kubernetes Prometheus server also needs a Deployment,
+  Service and RBAC permissions to discover pods. For the simplest reliable CIE demo, run the
+  already-complete Compose Prometheus/Grafana stack and run the application in Kubernetes.</p>
+
+  <h2 id="demo">8. Suggested 8–10 minute live demonstration</h2>
+  <ol>
+    <li><strong>Git:</strong> create <code>feature/shorten-api</code>, commit, push, open a pull request and merge.</li>
+    <li><strong>Jenkins:</strong> start Build with Parameters and show Checkout, Test, Docker Build, Docker Push and Kubernetes Deploy.</li>
+    <li><strong>Docker:</strong> show the Dockerfile, image tag and Docker Hub repository.</li>
+    <li><strong>Kubernetes:</strong> run <code>kubectl get pods -n url-shortener</code>, show 2 pods, then scale to 4.</li>
+    <li><strong>Prometheus:</strong> open <code>/targets</code> and show the target UP; run <code>sum(rate(http_requests_total[1m]))</code>.</li>
+    <li><strong>Grafana:</strong> open the dashboard and run the traffic script; explain rate, errors and p95 latency.</li>
+    <li><strong>Troubleshooting:</strong> temporarily deploy a wrong image tag, show <code>ImagePullBackOff</code>, use <code>kubectl describe pod</code>, restore the correct image and verify Running.</li>
+  </ol>
+
+  <h2 id="troubleshoot">9. Troubleshooting</h2>
+  <table>
+    <tr><th>Problem</th><th>Commands and fix</th></tr>
+    <tr><td>Root URL returns 404</td><td>Restart the API after pulling the latest code. Use <code>/health</code> for the health endpoint.</td></tr>
+    <tr><td>Compose app is unhealthy</td><td><code>docker compose logs postgres</code>, then <code>docker compose logs app</code>. Confirm PostgreSQL is healthy and restart with <code>docker compose up --build -d</code>.</td></tr>
+    <tr><td>Prometheus target is DOWN</td><td>Check <code>docker compose ps</code>, <code>docker compose logs prometheus</code>, and confirm the target is <code>app:3000</code>, not <code>localhost:3000</code>.</td></tr>
+    <tr><td>Grafana has no data</td><td>Confirm Prometheus target is UP, open Grafana datasource settings, and run the Prometheus query directly first.</td></tr>
+    <tr><td>Pod is ImagePullBackOff</td><td><code>kubectl describe pod POD_NAME -n url-shortener</code>. Correct the image name/tag or create the private registry pull secret.</td></tr>
+    <tr><td>Jenkins cannot run <code>docker</code></td><td>Install Docker CLI on the agent and give the agent access to the Docker daemon. Verify with <code>docker version</code> as the Jenkins user.</td></tr>
+    <tr><td>Jenkins cannot run <code>kubectl</code></td><td>Install kubectl on the agent and verify the <code>kubernetes-config</code> credential points to the intended cluster.</td></tr>
+    <tr><td>Jenkins webhook does not trigger</td><td>Use manual Build with Parameters for localhost Jenkins, or expose Jenkins through a secure reachable URL and configure the GitHub webhook.</td></tr>
+  </table>
+
+  <h2>10. Stop and clean up</h2>
+  <pre><code>docker compose down
+kubectl delete namespace url-shortener</code></pre>
+  <p class="warning">The Kubernetes delete command removes the demonstration namespace and its resources.
+  Use it only when you want to clean up this project.</p>
+
+  <h2>11. Related project files</h2>
+  <ul>
+    <li><code>jenkins/Jenkinsfile</code> — Jenkins stages and credentials IDs</li>
+    <li><code>k8s/</code> — namespace, PostgreSQL, API Deployment, Service and Prometheus scrape configuration</li>
+    <li><code>docker-compose.yml</code> — local PostgreSQL, API, Prometheus and Grafana stack</li>
+    <li><code>monitoring/prometheus.yml</code> — local Prometheus scrape target</li>
+    <li><code>monitoring/grafana/dashboard.json</code> — imported Grafana dashboard</li>
+    <li><code>DEMO.md</code> — presentation script</li>
+    <li><code>TROUBLESHOOTING.md</code> — failure demonstration guidance</li>
+    <li><code>VIVA.md</code> — viva questions and answers</li>
+  </ul>
+</main>
+</body>
+</html>

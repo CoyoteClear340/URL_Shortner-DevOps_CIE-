@@ -29,6 +29,12 @@ const request = require('supertest');
 const app = require('../src/app');
 
 describe('URL API', () => {
+  test('returns API information at the root URL', async () => {
+    const response = await request(app).get('/');
+    expect(response.status).toBe(200);
+    expect(response.body.health).toBe('/health');
+  });
+
   test('creates a short URL with a dynamic code', async () => {
     const response = await request(app)
       .post('/api/shorten')

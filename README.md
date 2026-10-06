@@ -17,6 +17,7 @@ A simple cloud-native URL shortener built with Node.js, Express, PostgreSQL, Doc
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
+| `GET` | `/` | Display API information |
 | `GET` | `/health` | Check application health |
 | `POST` | `/api/shorten` | Create a short URL |
 | `GET` | `/api/urls` | List stored URLs |
@@ -48,7 +49,13 @@ docker compose up -d postgres
 npm start
 ```
 
-Open:
+Open the API information page:
+
+```text
+http://localhost:3000/
+```
+
+For the health check, open:
 
 ```text
 http://localhost:3000/health
@@ -103,6 +110,11 @@ Traffic generation:
 .\scripts\generate-traffic.ps1 -Count 100
 ```
 
+The script sends health requests and intentionally sends one invalid short-code
+request for every ten requests. Those 404 responses are handled silently by
+the PowerShell script and are used to create a controlled error-rate signal
+for Grafana.
+
 The Grafana dashboard includes request rate, error rate, request latency, and application health panels.
 
 ## Testing
@@ -124,6 +136,11 @@ scripts/           Traffic-generation scripts
 Dockerfile        Container image definition
 docker-compose.yml Local development stack
 ```
+
+## Complete setup runbook
+
+For the full step-by-step Jenkins, Kubernetes, Prometheus and Grafana setup,
+open [DEVOPS_SETUP_GUIDE.html](DEVOPS_SETUP_GUIDE.html) in a browser.
 
 ## Study guides
 

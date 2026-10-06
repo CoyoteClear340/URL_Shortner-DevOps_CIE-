@@ -5,7 +5,11 @@ param(
 
 for ($i = 1; $i -le $Count; $i++) {
   if ($i % 10 -eq 0) {
-    Invoke-WebRequest -Uri "$BaseUrl/invalid-demo-code" -UseBasicParsing -ErrorAction SilentlyContinue | Out-Null
+    try {
+      Invoke-WebRequest -Uri "$BaseUrl/invalid-demo-code" -UseBasicParsing -ErrorAction Stop | Out-Null
+    } catch {
+      # This 404 is intentional so Grafana can display an error-rate spike.
+    }
   } else {
     Invoke-WebRequest -Uri "$BaseUrl/health" -UseBasicParsing | Out-Null
   }
