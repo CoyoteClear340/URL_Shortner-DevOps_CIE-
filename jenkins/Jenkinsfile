@@ -2,13 +2,15 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'DOCKER_IMAGE', defaultValue: 'your-dockerhub-user/url-shortener', description: 'Docker Hub image repository')
+        string(name: 'DOCKER_IMAGE', defaultValue: 'url-shortener', description: 'Docker image repository (e.g., your-dockerhub-user/url-shortener or url-shortener)')
         string(name: 'KUBE_NAMESPACE', defaultValue: 'url-shortener', description: 'Kubernetes namespace')
+        booleanParam(name: 'PUSH_TO_REGISTRY', defaultValue: false, description: 'Push image to Docker Hub (requires dockerhub-credentials in Jenkins)')
     }
 
     environment {
         IMAGE_TAG = "build-${BUILD_NUMBER}"
-        FULL_IMAGE = "${params.DOCKER_IMAGE}:build-${BUILD_NUMBER}"
+        FULL_IMAGE = "${params.DOCKER_IMAGE ?: 'url-shortener'}:build-${BUILD_NUMBER}"
+        KUBECONFIG = "C:\\Users\\Jaydeep\\.kube\\config"
     }
 
     stages {
@@ -33,11 +35,14 @@ pipeline {
 
         stage('Docker Build') {
             steps {
-                bat 'docker build -t "%FULL_IMAGE%" .'
+                bat 'docker build -t "%FULL_IMAGE%" -t url-shortener:latest .'
             }
         }
 
         stage('Docker Push') {
+            when {
+                expression { return params.PUSH_TO_REGISTRY == true }
+            }
             steps {
                 withCredentials([
                     usernamePassword(
@@ -46,7 +51,7 @@ pipeline {
                         passwordVariable: 'DOCKER_PASSWORD'
                     )
                 ]) {
-                    bat 'docker login --username "%DOCKER_USERNAME%" --password "%DOCKER_PASSWORD%"'
+                    bat 'echo %DOCKER_PASSWORD% | docker login -u "%DOCKER_USERNAME%" --password-stdin'
                     bat 'docker push "%FULL_IMAGE%"'
                 }
             }
@@ -54,26 +59,30 @@ pipeline {
 
         stage('Kubernetes Deploy') {
             steps {
-                withKubeConfig([credentialsId: 'kubernetes-config']) {
+                bat 'kubectl apply -f k8s/namespace.yaml'
 
-                    bat 'kubectl apply -f k8s/namespace.yaml'
+                // Ensure secrets exist before deploying PostgreSQL and application
+                bat '''
+                    kubectl -n "%KUBE_NAMESPACE%" create secret generic postgres-secret --from-literal=POSTGRES_PASSWORD=urlshortener --dry-run=client -o yaml | kubectl apply -f -
+                    kubectl -n "%KUBE_NAMESPACE%" create secret generic url-shortener-secret --from-literal=DATABASE_URL=postgresql://urlshortener:urlshortener@postgres:5432/urlshortener --dry-run=client -o yaml | kubectl apply -f -
+                '''
 
-                    bat 'kubectl apply -f k8s/configmap.yaml -f k8s/postgres.yaml -f k8s/service.yaml'
+                bat 'kubectl apply -f k8s/configmap.yaml -f k8s/postgres.yaml -f k8s/service.yaml'
 
-                    bat 'kubectl -n "%KUBE_NAMESPACE%" apply -f k8s/deployment.yaml'
+                bat 'kubectl -n "%KUBE_NAMESPACE%" apply -f k8s/deployment.yaml'
 
-                    bat 'kubectl -n "%KUBE_NAMESPACE%" set image deployment/url-shortener url-shortener="%FULL_IMAGE%"'
+                bat 'kubectl -n "%KUBE_NAMESPACE%" set image deployment/url-shortener url-shortener="%FULL_IMAGE%"'
 
-                    bat 'kubectl -n "%KUBE_NAMESPACE%" rollout status deployment/url-shortener --timeout=120s'
-                }
+                bat 'kubectl -n "%KUBE_NAMESPACE%" rollout status deployment/url-shortener --timeout=120s'
             }
         }
     }
 
     post {
         always {
-            bat 'docker logout'
+            bat 'docker logout 2>nul || ver >nul'
         }
     }
 }
+
 
